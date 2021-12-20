@@ -1,7 +1,7 @@
 ##########################################################################################
 """
 @@@ KIGO RESERVATION CHARGES IMPORTER API @@@
-@@@ version: v2.0 @@@
+@@@ version: v3.0 @@@
 @@@ ReservationCharges.py @@@
 """
 ##########################################################################################
@@ -9,6 +9,8 @@
 # Importing the Modules:-
 import pandas as pd
 import requests as r
+from requests.adapters import HTTPAdapter
+from requests.packages.urllib3.util.retry import Retry
 import multiprocessing
 import time
 import warnings
@@ -18,7 +20,7 @@ from decouple import config
 warnings.filterwarnings("ignore")
 
 
-class ReservationCharges:
+class ReservationChargesAPI:
     def __init__(self):
         print("\n@@@ Inside Kigo Reservation Charges Importer class @@@")
 
@@ -76,7 +78,7 @@ class ReservationCharges:
         return api_key, env
 
     @staticmethod
-    def destination_table_init(local, stage):
+    def destination_table_init(local, stage, history_tracker):
 
         # Intialize the Output Processing dict:-
         processing_dict = {
@@ -96,8 +98,8 @@ class ReservationCharges:
         }
 
         df_out = pd.DataFrame(processing_dict)
-        df_out.to_sql(f"tia_kigo_reservation_charges_import_processing", con=local, index=False, if_exists="replace")
-        df_out.to_sql(f"tia_kigo_reservation_charges_import_processing", con=stage, index=False, if_exists="replace")
+        df_out.to_sql(f"tia_kigo_reservation_charges_import_processing_{history_tracker}", con=local, index=False, if_exists="replace")
+        # df_out.to_sql(f"tia_kigo_reservation_charges_import_processing_{history_tracker}", con=stage, index=False, if_exists="replace")
 
     @staticmethod
     def processor_configurator(source_count):
@@ -125,28 +127,26 @@ class ReservationCharges:
         return splits
 
     @staticmethod
-    def prepare_source_data(local, stage):
+    def prepare_source_data(local, stage, scsql, history_tracker):
 
         # Prepare Source data for Master Folios Importer API
         print(f'$ Preparing Source data for Kigo Reservation Charges Importer API')
-        sql = '''
-                SELECT * FROM src_initial_kigo_reservation_report;
-        '''
+        sql = scsql
 
         df_src = pd.read_sql(sql, con=local)
-        df_src.to_sql('src_kigo_import_data', con=local, index=False, if_exists='replace')
+        df_src.to_sql(f'src_kigo_import_data_{history_tracker}', con=local, index=False, if_exists='replace')
         # df_src.to_sql('src_kigo_import_data', con=stage, index=False, if_exists='replace')
         print(f'$ Established Connection with Source DB')
         return df_src
 
     @staticmethod
-    def source_count(local, stage):
-        sql = "SELECT COUNT(1) FROM src_kigo_import_data;"
+    def source_count(local, stage, history_tracker):
+        sql = f"SELECT COUNT(1) FROM src_kigo_import_data_{history_tracker};"
         count = pd.read_sql(sql, con=local)
         print('$ Source Records Count: ', count['count(1)'][0])
         return count['count(1)'][0]
 
-    def start_multiprocessor(self, chunks, blocks, df_src, api_key, env, local_DB):
+    def start_multiprocessor(self, chunks, blocks, df_src, api_key, env, local_DB, history_tracker):
 
         # Creating Multi-processes for the splits and multiple rest api calls-
         print('Multi-Processor Start')
@@ -156,7 +156,8 @@ class ReservationCharges:
         for j in range(blocks + 1):
             s = multiprocessing.Process(target=self.reservation_charges_multiprocessor, args=(j, chunks, blocks, df_src,
                                                                                               api_key, env,
-                                                                                              local_DB))
+                                                                                              local_DB,
+                                                                                              history_tracker))
             print(f'Process-Initialized: {j}')
             processes.append(s)
 
@@ -167,7 +168,7 @@ class ReservationCharges:
         for process in processes:
             process.join()
 
-    def reservation_charges_multiprocessor(self, j, chunks, blocks, df_src, api_key, env, local_DB):
+    def reservation_charges_multiprocessor(self, j, chunks, blocks, df_src, api_key, env, local_DB, history_tracker):
 
         # Track Worker:-
         print(f"~~~ Worker Tracker: {j} ~~~")
@@ -177,9 +178,9 @@ class ReservationCharges:
         df_split = splits[j]
 
         # Call Chunks of Master Function:-
-        self.get_reservation_charges(df_split, env, api_key, local_DB)
+        self.get_reservation_charges(df_split, env, api_key, local_DB, history_tracker)
 
-    def get_reservation_charges(self, df, env, api_key, local_DB):
+    def get_reservation_charges(self, df, env, api_key, local_DB, history_tracker):
 
         local = create_engine(f"mysql+pymysql://root:admin@127.0.0.1:3306/{local_DB}")
 
@@ -195,14 +196,14 @@ class ReservationCharges:
 
             # Endpoint-router:-
             print("$$ Master KIGO Reservation Charges Processing $$")
-            self.reservation_charges_processing(df, local, env, api_key, index, headers)
+            self.reservation_charges_processing(df, local, env, api_key, index, headers, history_tracker)
 
             # End of master Loop
 
         print("\n@@ KIGO Reservation Charges Extraction Complete!")
 
     @staticmethod
-    def reservation_charges_processing(df, local, env, api_key, index, headers):
+    def reservation_charges_processing(df, local, env, api_key, index, headers, history_tracker):
 
         print("** GET: Kigo Reservation Charges")
 
@@ -216,8 +217,20 @@ class ReservationCharges:
               f"&entity=booking" \
               f"&ids={df['reservation_id'][index]}"
 
-        # 2. response body:-
-        response = r.get(url, headers=headers)
+        # 2. Response body with Retry feature:-
+        session = r.Session()
+        retry = Retry(connect=3, backoff_factor=0.5)
+        adaptor = HTTPAdapter(max_retries=retry)
+        session.mount('http://', adaptor)
+        session.mount('https://', adaptor)
+
+        try:
+            response = session.get(url, headers=headers)
+        except r.exceptions.ConnectionError as e:
+            time.sleep(5)
+            print(f'{e}', '=> Sleeping 5 seconds')
+            response = {}
+
         response_data = response.json()
         print("**", response.status_code, '|', response_data)
 
@@ -229,9 +242,9 @@ class ReservationCharges:
         except Exception as e:
             details = None
 
-        # 4. Looping through Details Dict:-
+        # 4. Looping Details Dict:-
 
-        if details is not None:
+        if len(details) != 0:
             ID_list = [int(detail['ID']) for count, detail in enumerate(details)]
             type_list = [str(detail['Type']) for count, detail in enumerate(details)]
             status_list = [str(detail['Status']) for count, detail in enumerate(details)]
@@ -291,43 +304,7 @@ class ReservationCharges:
 
         print("@@ Loading Output Processing table => Local/Stage @@\n")
         df_out = pd.DataFrame(processing_dict)
-        df_out.to_sql(f"tia_kigo_reservation_charges_import_processing", con=local, index=False, if_exists="append")
+        df_out.to_sql(f"tia_kigo_reservation_charges_import_processing_{history_tracker}", con=local, index=False,
+                      if_exists="append")
 
         return processing_dict
-
-    @staticmethod
-    def reset_list_data():
-
-        processing_dict = {
-            'reservation_id': pd.Series([], dtype='int'),
-            'ID': pd.Series([], dtype='int'),
-            'Type': pd.Series([], dtype='str'),
-            'Status': pd.Series([], dtype='str'),
-            'Quantity': pd.Series([], dtype='int'),
-            'Amount': pd.Series([], dtype='float'),
-            'SubTotal': pd.Series([], dtype='float'),
-            'Notes': pd.Series([], dtype='str'),
-            'FriendlyType': pd.Series([], dtype='str'),
-            'ShowOnStatement': pd.Series([], dtype='str'),
-            'api_response': pd.Series([], dtype='int'),
-            'remarks': pd.Series([], dtype='str'),
-            'api_links': pd.Series([], dtype='str')
-        }
-
-        reservation_id_list = []
-        ID_list = []
-        type_list = []
-        status_list = []
-        qty_list = []
-        amount_list = []
-        sub_total_list = []
-        notes_list = []
-        friendly_type_list = []
-        ShowOnStatement = []
-        api_response_list = []
-        api_links_list = []
-        remarks_list = []
-
-        return processing_dict, reservation_id_list, ID_list, type_list, status_list, qty_list, amount_list, \
-               sub_total_list, notes_list, friendly_type_list, ShowOnStatement, api_response_list, api_links_list, \
-               remarks_list

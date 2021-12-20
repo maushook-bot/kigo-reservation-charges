@@ -1,7 +1,7 @@
 """
 @@@ Read/Write Data from/to Gsheet API Class @@@
 @@@ KIGO Reservation Charges Importer API @@@
-@@@ version: v2.0 @@@
+@@@ version: v3.0 @@@
 @@@ DataDecoupler.py @@@
 """
 
