@@ -182,7 +182,7 @@ class ReservationChargesAPI:
 
     def get_reservation_charges(self, df, env, api_key, local_DB, history_tracker):
 
-        local = create_engine(f"mysql+pymysql://root:admin@127.0.0.1:3306/{local_DB}")
+        local = create_engine(f"mysql+pymysql://root:mash_admin@127.0.0.1:3306/{local_DB}")
 
         for index, row in df.iterrows():
             # start of master loop:-
@@ -240,7 +240,7 @@ class ReservationChargesAPI:
             details = response_data['result'][0]['Statement']['Details']
             print('**', len(details), '=>', details)
         except Exception as e:
-            details = None
+            details = {}
 
         # 4. Looping Details Dict:-
 

@@ -9,7 +9,7 @@ Special Request Reservation Charges Data Importer from Kigo PMS System.
 
 ##### Source SQL for Charges Extraction => Local/ Stage Env
 
-    SELECT * FROM src_initial_kigo_reservation_report;
+    SELECT * FROM src_hist_kigo_reservation_report;
     
 
 ##### Splitting the Datasets:-
@@ -49,9 +49,14 @@ Special Request Reservation Charges Data Importer from Kigo PMS System.
     SELECT * FROM src_hist_kigo_reservation_report f
     WHERE f.id BETWEEN 100001 AND 120000;
     
-    # RUN-7 => 120001 - 150376
+    # RUN-7 => 120001 - 140000
     SELECT * FROM src_hist_kigo_reservation_report f
-    WHERE f.id BETWEEN 120001 AND 150376;
+    WHERE f.id BETWEEN 120001 AND 140000;
+    
+    # RUN-8 => 140001 - 150376
+    SELECT * FROM src_hist_kigo_reservation_report f
+    WHERE f.id BETWEEN 140001 AND 150376;
+    
     
     ################### SQL DUMPS #####################
     SELECT DISTINCT r.id, r.reservation_id
@@ -83,6 +88,11 @@ Special Request Reservation Charges Data Importer from Kigo PMS System.
     SELECT DISTINCT r.id, r.reservation_id
     FROM src_kigo_import_data_run1_4 r 
     LEFT JOIN tia_kigo_reservation_charges_import_processing_run1_4 f ON r.reservation_id = f.reservation_id
+    WHERE f.reservation_id IS NULL;
+    
+    SELECT DISTINCT r.id, r.reservation_id
+    FROM src_kigo_import_data_run1_1 r 
+    LEFT JOIN tia_kigo_reservation_charges_import_processing_run1_1 f ON r.reservation_id = f.reservation_id
     WHERE f.reservation_id IS NULL;
     
     
